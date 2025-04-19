@@ -290,6 +290,17 @@ function addPrintButton(visuals) {
     const printWindow = window.open('', '_blank');
     printWindow.document.write('<html><head><title>Print Layout</title></head><body style="font-family:sans-serif;">');
     printWindow.document.write('<h2>Wood Cut Sheet Layout</h2>');
+    const table = document.querySelector('.cut-table');
+    let tableHTML = '';
+    if (table) {
+      tableHTML = '<table style="border-collapse: collapse; width: 100%; font-family: sans-serif;">' +
+        table.innerHTML.replace(/<th>/g, '<th style="background:#f2f2f2; padding: 8px; border: 1px solid #ccc; text-align: left;">')
+                        .replace(/<td>/g, '<td style="padding: 6px; border: 1px solid #ddd; vertical-align: top;">') +
+        '</table>';
+    }
+    if (tableHTML) {
+      printWindow.document.write('<div style="margin-bottom:20px;">' + tableHTML + '</div>');
+    }
     visuals.forEach((vis, i) => {
       const canvas = document.createElement('canvas');
       canvas.width = 350;
@@ -321,9 +332,10 @@ function addPrintButton(visuals) {
         ctx.fillText(box.label, x + 2, y + 10);
       });
       const imgURL = canvas.toDataURL();
-      printWindow.document.write(`<div style="display:inline-block; width:48%; margin:5px;"><h4>Sheet ${i + 1}</h4><img src="${imgURL}" style="width:100%; border:1px solid #ccc;"></div>`);
+      printWindow.document.write(`<div style="display:inline-block; width:48%; margin:5px; border:1px solid #999; padding:10px;"><h4>Sheet ${i + 1}</h4><img src="${imgURL}" style="width:100%; border:1px solid #ccc;"></div>`);
     });
-    printWindow.document.write('</body></html>');
+    printWindow.document.write('<hr style="margin:20px 0; border-top: 2px dashed #ccc;">');
+printWindow.document.write('</body></html>');
     printWindow.document.close();
     printWindow.focus();
     setTimeout(() => printWindow.print(), 500);
