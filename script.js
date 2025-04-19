@@ -18,6 +18,7 @@ function processInput() {
     const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
     const { sheets, warnings, visuals } = packSheets(validPieces, conservative);
     displayResults(sheets, [...errors, ...warnings], visuals);
+    addPrintButton(visuals);
 
   } catch (error) {
     console.error("Calculation error:", error);
@@ -270,6 +271,58 @@ function displayResults(sheets, errors, visuals) {
     detailsDiv.appendChild(label);
     detailsDiv.appendChild(canvas);
   });
+}
+
+function addPrintButton(visuals) {
+  const existing = document.getElementById('printBtn');
+  if (existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.id = 'printBtn';
+  btn.textContent = 'Print Layout';
+  btn.style.margin = '10px 0';
+  btn.onclick = () => {
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write('<html><head><title>Print Layout</title></head><body style="font-family:sans-serif;">');
+    printWindow.document.write('<h2>Wood Cut Sheet Layout</h2>');
+    visuals.forEach((vis, i) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 350;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const scaleX = canvas.width / config.sheetWidth;
+      const scaleY = canvas.height / config.sheetHeight;
+      const colorMap = {};
+      const colorPalette = ['#3498db','#e74c3c','#2ecc71','#f39c12','#9b59b6','#1abc9c','#34495e','#e67e22'];
+      let colorIndex = 0;
+      vis.forEach(box => {
+        if (!colorMap[box.colorKey]) {
+          colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length];
+          colorIndex++;
+        }
+        const x = box.x * scaleX;
+        const y = box.y * scaleY;
+        const w = box.width * scaleX;
+        const h = box.height * scaleY;
+        ctx.fillStyle = colorMap[box.colorKey];
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle = '#000';
+        ctx.font = '9px sans-serif';
+        ctx.fillText(box.label, x + 2, y + 10);
+      });
+      const imgURL = canvas.toDataURL();
+      printWindow.document.write(`<div style="display:inline-block; width:48%; margin:5px;"><h4>Sheet ${i + 1}</h4><img src="${imgURL}" style="width:100%; border:1px solid #ccc;"></div>`);
+    });
+    printWindow.document.write('</body></html>');
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 500);
+  };
+  document.getElementById('cutDetails').prepend(btn);
 }
 
 function clearAll() {
