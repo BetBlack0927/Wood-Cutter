@@ -7,12 +7,20 @@ const config = {
 
 // Main function called when clicking Calculate
 function processInput() {
-  try {
-    const input = document.getElementById('bulkInput').value;
-    if (!input.trim()) {
-      alert("Please enter some pieces to calculate");
-      return;
-    }
+  const input = document.getElementById('bulkInput').value;
+  const pieces = parseInput(input);
+
+  const errors = pieces
+    .filter(p => (p.width > config.sheetWidth && p.height > config.sheetWidth) || 
+                 (p.width > config.sheetHeight && p.height > config.sheetHeight))
+    .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
+
+  const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
+
+  const sheets = calculateSheets(validPieces);
+  displayResults(sheets, errors);
+}
+
 
     const pieces = parseInput(input);
     const { sheets, errors } = calculateSheets(pieces);
