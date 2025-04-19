@@ -5,6 +5,26 @@ const config = {
   kerf: 0.125
 };
 
+// Main function called when clicking Calculate
+function processInput() {
+  try {
+    const input = document.getElementById('bulkInput').value;
+    if (!input.trim()) {
+      alert("Please enter some pieces to calculate");
+      return;
+    }
+
+    const pieces = parseInput(input);
+    const { sheets, errors } = calculateSheets(pieces);
+    displayResults(sheets, errors);
+  } catch (error) {
+    console.error("Calculation error:", error);
+    document.getElementById('errors').innerHTML = 
+      `<div class="error">⚠️ Calculation failed: ${error.message}</div>`;
+  }
+}
+
+// Parse the input text into piece objects
 function parseInput(text) {
   return text.split('\n')
     .filter(line => line.trim())
@@ -24,6 +44,7 @@ function parseInput(text) {
     });
 }
 
+// Helper to convert fractional inches to decimal
 function parseFraction(str) {
   return str.split(/[- ]/).reduce((total, part) => {
     if (part.includes('/')) {
@@ -34,6 +55,7 @@ function parseFraction(str) {
   }, 0);
 }
 
+// Check if piece qualifies for 1-cut
 function isEfficient(piece) {
   return config.efficientDims.some(dim => 
     Math.abs(piece.width - dim) < 0.01 || 
@@ -41,139 +63,114 @@ function isEfficient(piece) {
   );
 }
 
+// Main calculation function
 function calculateSheets(pieces) {
   const sheets = [];
-  let remainingPieces = pieces.map(p => ({ 
-    ...p, 
-    rotations: [false, true] // Try both orientations
-  }));
+  const errors = [];
+  let remainingPieces = JSON.parse(JSON.stringify(pieces)); // Deep copy
 
-  while (remainingPieces.some(p => p.qty > 0)) {
-    let bestSheet = null;
-    let bestUtilization = 0;
-
-    // Try different packing strategies
-    for (const strategy of ['height', 'width', 'area']) {
-      const sheet = tryPackSheet([...remainingPieces], strategy);
-      const utilization = sheet.utilization;
-      
-      if (utilization > bestUtilization) {
-        bestSheet = sheet;
-        bestUtilization = utilization;
-      }
+  // First remove pieces that are too large
+  remainingPieces = remainingPieces.filter(p => {
+    const fitsNormal = p.width <= config.sheetWidth && p.height <= config.sheetHeight;
+    const fitsRotated = p.height <= config.sheetWidth && p.width <= config.sheetHeight;
+    
+    if (!fitsNormal && !fitsRotated) {
+      errors.push(`${p.originalWidth}" × ${p.originalHeight}"`);
+      return false;
     }
-
-    if (bestSheet) {
-      sheets.push(bestSheet);
-      // Update remaining quantities
-      bestSheet.pieces.forEach(({ piece, count }) => {
-        const original = remainingPieces.find(p => 
-          p.originalWidth === piece.originalWidth &&
-          p.originalHeight === piece.originalHeight
-        );
-        if (original) original.qty -= count;
-      });
-      remainingPieces = remainingPieces.filter(p => p.qty > 0);
-    }
-  }
-
-  return sheets;
-}
-
-function tryPackSheet(pieces, strategy) {
-  const sheet = {
-    pieces: [],
-    usedArea: 0,
-    utilization: 0,
-    cuts: 0,
-    edges: 0
-  };
-
-  // Sort based on strategy
-  const sorted = [...pieces].sort((a, b) => {
-    const aSize = strategy === 'height' ? a.height :
-                 strategy === 'width' ? a.width :
-                 a.width * a.height;
-    const bSize = strategy === 'height' ? b.height :
-                 strategy === 'width' ? b.width :
-                 b.width * b.height;
-    return bSize - aSize;
+    return true;
   });
 
-  let remainingWidth = config.sheetWidth;
-  let remainingHeight = config.sheetHeight;
-  let currentY = 0;
+  // Sort by area descending
+  remainingPieces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
-  for (const piece of sorted) {
-    if (piece.qty <= 0) continue;
+  while (remainingPieces.some(p => p.qty > 0)) {
+    const sheet = {
+      pieces: [],
+      usedWidth: 0,
+      usedHeight: 0,
+      cuts: 0,
+      edges: 0
+    };
 
-    // Try all possible rotations
-    for (const rotation of piece.rotations) {
-      const pw = rotation ? piece.height + config.kerf : piece.width + config.kerf;
-      const ph = rotation ? piece.width + config.kerf : piece.height + config.kerf;
+    // Try to fit pieces into current sheet
+    for (let i = 0; i < remainingPieces.length; i++) {
+      const piece = remainingPieces[i];
+      if (piece.qty <= 0) continue;
 
-      if (pw <= remainingWidth && ph <= remainingHeight) {
-        const maxFitX = Math.floor(remainingWidth / pw);
-        const maxFitY = Math.floor(remainingHeight / ph);
-        const maxFit = Math.min(maxFitX * maxFitY, piece.qty);
+      // Try both orientations
+      for (let rotated = 0; rotated <= 1; rotated++) {
+        const pw = rotated ? piece.height + config.kerf : piece.width + config.kerf;
+        const ph = rotated ? piece.width + config.kerf : piece.height + config.kerf;
 
-        if (maxFit > 0) {
-          const placed = Math.min(maxFit, maxFitX);
-          sheet.pieces.push({
-            piece,
-            count: placed,
-            rotated: rotation,
-            width: pw,
-            height: ph
-          });
-          sheet.usedArea += (piece.width * piece.height) * placed;
-          sheet.cuts += isEfficient(piece) ? placed : placed * 2;
-          sheet.edges += piece.edges * placed;
-          
-          // Update remaining space
-          remainingWidth -= pw * placed;
-          if (remainingWidth <= 0) {
-            remainingWidth = config.sheetWidth;
-            currentY += ph;
-            remainingHeight = config.sheetHeight - currentY;
+        if (sheet.usedWidth + pw <= config.sheetWidth && 
+            ph <= config.sheetHeight) {
+          const maxFit = Math.min(
+            Math.floor((config.sheetWidth - sheet.usedWidth) / pw),
+            piece.qty
+          );
+
+          if (maxFit > 0) {
+            sheet.pieces.push({
+              piece,
+              count: maxFit,
+              rotated: rotated === 1
+            });
+            sheet.usedWidth += pw * maxFit;
+            sheet.cuts += isEfficient(piece) ? maxFit : maxFit * 2;
+            sheet.edges += piece.edges * maxFit;
+            piece.qty -= maxFit;
           }
-          break;
         }
       }
     }
+
+    if (sheet.pieces.length > 0) {
+      sheets.push(sheet);
+    }
+
+    // Remove pieces with zero quantity
+    remainingPieces = remainingPieces.filter(p => p.qty > 0);
   }
 
-  sheet.utilization = sheet.usedArea / (config.sheetWidth * config.sheetHeight);
-  return sheet;
+  return { sheets, errors };
 }
 
+// Display results in the page
 function displayResults(sheets, errors) {
   const resultsDiv = document.getElementById('results');
   const errorsDiv = document.getElementById('errors');
   const detailsDiv = document.getElementById('cutDetails');
 
+  // Clear previous results
+  resultsDiv.innerHTML = '';
+  errorsDiv.innerHTML = '';
+  detailsDiv.innerHTML = '';
+
+  // Show summary
   resultsDiv.innerHTML = `
     <div class="result-item">Total Sheets Needed: <strong>${sheets.length}</strong></div>
     <div class="result-item">Total Cuts: <strong>${sheets.reduce((a, s) => a + s.cuts, 0)}</strong></div>
     <div class="result-item">Total Edges: <strong>${sheets.reduce((a, s) => a + s.edges, 0)}</strong></div>
   `;
 
+  // Show errors if any
   if (errors.length > 0) {
     errorsDiv.innerHTML = `
-      <div class="error">⚠️ Invalid Pieces (too large):
+      <div class="error">⚠️ Pieces too large for standard sheets:
         <ul>${errors.map(p => `<li>${p}</li>`).join('')}</ul>
       </div>
     `;
   }
 
+  // Show detailed cutting plan
   let tableHTML = `
     <table class="cut-table">
       <tr>
         <th>Sheet</th>
-        <th>Layout</th>
+        <th>Pieces</th>
         <th>Cuts</th>
         <th>Edges</th>
-        <th>Utilization</th>
       </tr>
   `;
 
@@ -183,26 +180,18 @@ function displayResults(sheets, errors) {
         <td>Sheet ${index + 1}</td>
         <td>
           ${sheet.pieces.map(p => `
-            ${p.count}× ${p.rotated ? `${p.piece.originalHeight}"×${p.piece.originalWidth}"` : `${p.piece.originalWidth}"×${p.piece.originalHeight}"`} 
+            ${p.count}× ${p.rotated ? `${p.piece.originalHeight}"×${p.piece.originalWidth}"` : `${p.piece.originalWidth}"×${p.piece.originalHeight}"`}
             <span class="${isEfficient(p.piece) ? 'efficient' : 'inefficient'}">(${isEfficient(p.piece) ? '1-cut' : '2-cut'})</span>
           `).join('<br>')}
         </td>
         <td>${sheet.cuts}</td>
         <td>${sheet.edges}</td>
-        <td>${Math.round(sheet.utilization * 100)}%</td>
       </tr>
     `;
   });
 
   tableHTML += '</table>';
-  detailsDiv.innerHTML = `<h3>Cutting Details</h3>${tableHTML}`;
-}
-
-function processInput() {
-  const input = document.getElementById('bulkInput').value;
-  const pieces = parseInput(input);
-  const { sheets, errors } = calculateSheets(pieces);
-  displayResults(sheets, errors);
+  detailsDiv.innerHTML = `<h3>Cutting Plan</h3>${tableHTML}`;
 }
 
 function clearAll() {
@@ -211,3 +200,8 @@ function clearAll() {
   document.getElementById('errors').innerHTML = '';
   document.getElementById('cutDetails').innerHTML = '';
 }
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelector('button').addEventListener('click', processInput);
+});
