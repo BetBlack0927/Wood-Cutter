@@ -7,24 +7,20 @@ const config = {
 
 // Main function called when clicking Calculate
 function processInput() {
-  const input = document.getElementById('bulkInput').value;
-  const pieces = parseInput(input);
-
-  const errors = pieces
-    .filter(p => (p.width > config.sheetWidth && p.height > config.sheetWidth) || 
-                 (p.width > config.sheetHeight && p.height > config.sheetHeight))
-    .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
-
-  const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
-
-  const sheets = calculateSheets(validPieces);
-  displayResults(sheets, errors);
-}
-
-
+  try {
+    const input = document.getElementById('bulkInput').value;
     const pieces = parseInput(input);
-    const { sheets, errors } = calculateSheets(pieces);
+
+    const errors = pieces
+      .filter(p => (p.width > config.sheetWidth && p.height > config.sheetWidth) || 
+                   (p.width > config.sheetHeight && p.height > config.sheetHeight))
+      .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
+
+    const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
+
+    const { sheets } = calculateSheets(validPieces);
     displayResults(sheets, errors);
+
   } catch (error) {
     console.error("Calculation error:", error);
     document.getElementById('errors').innerHTML = 
@@ -77,7 +73,7 @@ function calculateSheets(pieces) {
   const errors = [];
   let remainingPieces = JSON.parse(JSON.stringify(pieces)); // Deep copy
 
-  // First remove pieces that are too large
+  // Remove oversized pieces
   remainingPieces = remainingPieces.filter(p => {
     const fitsNormal = p.width <= config.sheetWidth && p.height <= config.sheetHeight;
     const fitsRotated = p.height <= config.sheetWidth && p.width <= config.sheetHeight;
@@ -101,12 +97,10 @@ function calculateSheets(pieces) {
       edges: 0
     };
 
-    // Try to fit pieces into current sheet
     for (let i = 0; i < remainingPieces.length; i++) {
       const piece = remainingPieces[i];
       if (piece.qty <= 0) continue;
 
-      // Try both orientations
       for (let rotated = 0; rotated <= 1; rotated++) {
         const pw = rotated ? piece.height + config.kerf : piece.width + config.kerf;
         const ph = rotated ? piece.width + config.kerf : piece.height + config.kerf;
@@ -137,7 +131,6 @@ function calculateSheets(pieces) {
       sheets.push(sheet);
     }
 
-    // Remove pieces with zero quantity
     remainingPieces = remainingPieces.filter(p => p.qty > 0);
   }
 
@@ -155,14 +148,12 @@ function displayResults(sheets, errors) {
   errorsDiv.innerHTML = '';
   detailsDiv.innerHTML = '';
 
-  // Show summary
   resultsDiv.innerHTML = `
     <div class="result-item">Total Sheets Needed: <strong>${sheets.length}</strong></div>
     <div class="result-item">Total Cuts: <strong>${sheets.reduce((a, s) => a + s.cuts, 0)}</strong></div>
     <div class="result-item">Total Edges: <strong>${sheets.reduce((a, s) => a + s.edges, 0)}</strong></div>
   `;
 
-  // Show errors if any
   if (errors.length > 0) {
     errorsDiv.innerHTML = `
       <div class="error">⚠️ Pieces too large for standard sheets:
@@ -171,7 +162,6 @@ function displayResults(sheets, errors) {
     `;
   }
 
-  // Show detailed cutting plan
   let tableHTML = `
     <table class="cut-table">
       <tr>
@@ -208,8 +198,3 @@ function clearAll() {
   document.getElementById('errors').innerHTML = '';
   document.getElementById('cutDetails').innerHTML = '';
 }
-
-// Initialize when page loads
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelector('button').addEventListener('click', processInput);
-});
