@@ -5,6 +5,7 @@ const config = {
 };
 
 function processInput() {
+  const conservative = document.getElementById('conservativeToggle')?.checked;
   try {
     const input = document.getElementById('bulkInput').value;
     const pieces = parseInput(input);
@@ -15,7 +16,7 @@ function processInput() {
       .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
 
     const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
-    const { sheets, warnings, visuals } = packSheets(validPieces);
+    const { sheets, warnings, visuals } = packSheets(validPieces, conservative);
     displayResults(sheets, [...errors, ...warnings], visuals);
 
   } catch (error) {
@@ -61,7 +62,7 @@ function isEfficient(piece) {
   );
 }
 
-function packSheets(pieces) {
+function packSheets(pieces, conservativeMode = true) {
   const sheets = [];
   const visuals = [];
   const warnings = [];
@@ -116,6 +117,18 @@ function packSheets(pieces) {
     }
   }
 
+  if (conservativeMode && sheets.length > 0) {
+    const lastSheet = sheets[sheets.length - 1];
+    const hasShortPiece = lastSheet.pieces.some(p => {
+      const height = p.rotated ? p.piece.width : p.piece.height;
+      return height < config.sheetHeight;
+    });
+    if (lastSheet.pieces.length <= 2 && hasShortPiece) {
+      warnings.push("⚠️ Conservative Mode: 1 extra sheet may be used for easier workflow.");
+      sheets.push({ pieces: [], cuts: 0, edges: 0 });
+      visuals.push([]);
+    }
+  }
   return { sheets, warnings, visuals };
 }
 
@@ -206,7 +219,7 @@ function displayResults(sheets, errors, visuals) {
       const y = box.y * scaleY;
       const w = box.width * scaleX;
       const h = box.height * scaleY;
-      
+
       ctx.fillStyle = '#3498db';
       ctx.fillRect(x, y, w, h);
 
