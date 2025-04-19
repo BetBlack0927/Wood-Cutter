@@ -5,12 +5,13 @@ const config = {
   kerf: 0.125
 };
 
-// Main function called when clicking Calculate
+// Main function triggered by Calculate button
 function processInput() {
   try {
     const input = document.getElementById('bulkInput').value;
     const pieces = parseInput(input);
 
+    // Filter and report oversized pieces
     const errors = pieces
       .filter(p => (p.width > config.sheetWidth && p.height > config.sheetWidth) || 
                    (p.width > config.sheetHeight && p.height > config.sheetHeight))
@@ -18,8 +19,9 @@ function processInput() {
 
     const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
 
-    const { sheets } = calculateSheets(validPieces);
-    displayResults(sheets, errors);
+    const { sheets, warnings } = calculateSheets(validPieces);
+
+    displayResults(sheets, [...errors, ...warnings]);
 
   } catch (error) {
     console.error("Calculation error:", error);
@@ -28,7 +30,7 @@ function processInput() {
   }
 }
 
-// Parse the input text into piece objects
+// Parses user input into usable piece data
 function parseInput(text) {
   return text.split('\n')
     .filter(line => line.trim())
@@ -36,7 +38,7 @@ function parseInput(text) {
       const [left, right] = line.split('=').map(s => s.trim());
       const dimPart = left.replace(/"/g, '').toLowerCase();
       const [widthStr, heightStr] = dimPart.split(/x/);
-      
+
       return {
         originalWidth: widthStr.trim(),
         originalHeight: heightStr.trim(),
@@ -48,7 +50,7 @@ function parseInput(text) {
     });
 }
 
-// Helper to convert fractional inches to decimal
+// Converts fractional input like 23-7/8 to decimal
 function parseFraction(str) {
   return str.split(/[- ]/).reduce((total, part) => {
     if (part.includes('/')) {
@@ -59,7 +61,7 @@ function parseFraction(str) {
   }, 0);
 }
 
-// Check if piece qualifies for 1-cut
+// Checks if a piece qualifies as efficient
 function isEfficient(piece) {
   return config.efficientDims.some(dim => 
     Math.abs(piece.width - dim) < 0.01 || 
@@ -67,32 +69,28 @@ function isEfficient(piece) {
   );
 }
 
-// Main calculation function
+// Main packing algorithm
 function calculateSheets(pieces) {
   const sheets = [];
-  const errors = [];
-  let remainingPieces = JSON.parse(JSON.stringify(pieces)); // Deep copy
+  const warnings = [];
+  let remainingPieces = JSON.parse(JSON.stringify(pieces)); // Deep clone
+  let safety = 1000; // Safety limiter
 
-  // Remove oversized pieces
+  // Remove any pieces too large even with rotation
   remainingPieces = remainingPieces.filter(p => {
     const fitsNormal = p.width <= config.sheetWidth && p.height <= config.sheetHeight;
     const fitsRotated = p.height <= config.sheetWidth && p.width <= config.sheetHeight;
     
-    if (!fitsNormal && !fitsRotated) {
-      errors.push(`${p.originalWidth}" × ${p.originalHeight}"`);
-      return false;
-    }
-    return true;
+    return fitsNormal || fitsRotated;
   });
 
-  // Sort by area descending
+  // Sort pieces largest area first
   remainingPieces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
-  while (remainingPieces.some(p => p.qty > 0)) {
+  while (remainingPieces.some(p => p.qty > 0) && safety-- > 0) {
     const sheet = {
       pieces: [],
       usedWidth: 0,
-      usedHeight: 0,
       cuts: 0,
       edges: 0
     };
@@ -101,12 +99,13 @@ function calculateSheets(pieces) {
       const piece = remainingPieces[i];
       if (piece.qty <= 0) continue;
 
+      let placed = false;
+
       for (let rotated = 0; rotated <= 1; rotated++) {
         const pw = rotated ? piece.height + config.kerf : piece.width + config.kerf;
         const ph = rotated ? piece.width + config.kerf : piece.height + config.kerf;
 
-        if (sheet.usedWidth + pw <= config.sheetWidth && 
-            ph <= config.sheetHeight) {
+        if (sheet.usedWidth + pw <= config.sheetWidth && ph <= config.sheetHeight) {
           const maxFit = Math.min(
             Math.floor((config.sheetWidth - sheet.usedWidth) / pw),
             piece.qty
@@ -122,22 +121,34 @@ function calculateSheets(pieces) {
             sheet.cuts += isEfficient(piece) ? maxFit : maxFit * 2;
             sheet.edges += piece.edges * maxFit;
             piece.qty -= maxFit;
+            placed = true;
+            break;
           }
         }
       }
+
+      // If not placed in this sheet, try next piece
     }
 
     if (sheet.pieces.length > 0) {
       sheets.push(sheet);
+    } else {
+      // No pieces fit — prevent infinite loop
+      warnings.push("⚠️ Some pieces could not be placed. Check for tight tolerances or odd sizes.");
+      break;
     }
 
     remainingPieces = remainingPieces.filter(p => p.qty > 0);
   }
 
-  return { sheets, errors };
+  if (safety <= 0) {
+    warnings.push("⚠️ Loop safety limit reached — input too complex or unplaceable.");
+  }
+
+  return { sheets, warnings };
 }
 
-// Display results in the page
+// Renders results and errors on the page
 function displayResults(sheets, errors) {
   const resultsDiv = document.getElementById('results');
   const errorsDiv = document.getElementById('errors');
@@ -156,7 +167,7 @@ function displayResults(sheets, errors) {
 
   if (errors.length > 0) {
     errorsDiv.innerHTML = `
-      <div class="error">⚠️ Pieces too large for standard sheets:
+      <div class="error">⚠️ Issues Found:
         <ul>${errors.map(p => `<li>${p}</li>`).join('')}</ul>
       </div>
     `;
@@ -192,6 +203,7 @@ function displayResults(sheets, errors) {
   detailsDiv.innerHTML = `<h3>Cutting Plan</h3>${tableHTML}`;
 }
 
+// Clear all fields
 function clearAll() {
   document.getElementById('bulkInput').value = '';
   document.getElementById('results').innerHTML = '';
