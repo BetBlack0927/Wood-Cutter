@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wood Cut Calculator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Wood Sheet Cut Calculator</h1>
+    <p>Standard sheet size: 4' × 8' (48" × 96")</p>
+  </header>
+
+  <main>
+    <div class="input-section">
+      <h2>Input Pieces</h2>
+      <textarea id="bulkInput" placeholder="Paste cuts here:
+Example:
+15-7/8&quot; X 96&quot; = 49PCS 2L EDGE
+23-7/8&quot; X 96&quot; = 20PCS 1L EDGE"></textarea>
+      <div>
+        <button onclick="processInput()">Calculate</button>
+        <button onclick="clearAll()">Clear</button>
+      </div>
+    </div>
+
+    <div class="results-section">
+      <h2>Results</h2>
+      <div id="results"></div>
+      <div id="errors" class="error"></div>
+      <div id="cutDetails"></div>
+    </div>
+  </main>
+
+  <footer>
+    <p>&copy; 2024 Wood Cutting Solutions</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
