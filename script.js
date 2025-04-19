@@ -1,3 +1,4 @@
+// Guillotine-based wood cut calculator (Accurate full-length cuts, smart fit)
 const config = {
   sheetWidth: 48,
   sheetHeight: 96,
@@ -16,7 +17,7 @@ function processInput() {
       .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
 
     const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
-    const { sheets, warnings, visuals } = packSheets(validPieces, conservative);
+    const { sheets, warnings, visuals } = packSheetsGuillotine(validPieces, conservative);
     displayResults(sheets, [...errors, ...warnings], visuals);
     addPrintButton(visuals);
 
@@ -63,34 +64,46 @@ function isEfficient(piece) {
   );
 }
 
-function packSheets(pieces, conservativeMode = true) {
+function packSheetsGuillotine(pieces, conservativeMode = true) {
   const sheets = [];
   const visuals = [];
   const warnings = [];
   const remaining = JSON.parse(JSON.stringify(pieces)).filter(p => p.qty > 0);
 
+  remaining.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+
   while (remaining.some(p => p.qty > 0)) {
-    const sheet = {
-      pieces: [],
-      cuts: 0,
-      edges: 0
-    };
+    const sheet = { pieces: [], cuts: 0, edges: 0 };
     const visual = [];
-    const placedRects = [];
+    const sheetRects = [{ x: 0, y: 0, width: config.sheetWidth, height: config.sheetHeight }];
 
     for (let i = 0; i < remaining.length; i++) {
       const p = remaining[i];
       if (p.qty <= 0) continue;
 
+      let placed = false;
       for (const rotated of [false, true]) {
         const pw = rotated ? p.height : p.width;
         const ph = rotated ? p.width : p.height;
 
-        while (p.qty > 0) {
-          const pos = findFreeSpot(placedRects, pw, ph);
-          if (!pos) break;
+        // Try all rectangles to find the best fit
+        let bestFitIndex = -1;
+        let minWaste = Infinity;
 
-          placedRects.push({ x: pos.x, y: pos.y, width: pw, height: ph });
+        for (let r = 0; r < sheetRects.length; r++) {
+          const rect = sheetRects[r];
+          if (pw <= rect.width && ph <= rect.height) {
+            const waste = (rect.width * rect.height) - (pw * ph);
+            if (waste < minWaste) {
+              minWaste = waste;
+              bestFitIndex = r;
+            }
+          }
+        }
+
+        if (bestFitIndex >= 0) {
+          const rect = sheetRects[bestFitIndex];
+          const pos = { x: rect.x, y: rect.y };
 
           visual.push({
             x: pos.x,
@@ -105,9 +118,27 @@ function packSheets(pieces, conservativeMode = true) {
           sheet.cuts += isEfficient(p) ? 1 : 2;
           sheet.edges += p.edges;
           p.qty--;
+
+          // Guillotine split: cut fully right and below
+          sheetRects.splice(bestFitIndex, 1);
+          sheetRects.push({
+            x: pos.x + pw,
+            y: pos.y,
+            width: rect.width - pw,
+            height: ph
+          });
+          sheetRects.push({
+            x: pos.x,
+            y: pos.y + ph,
+            width: rect.width,
+            height: rect.height - ph
+          });
+
+          placed = true;
+          break;
         }
-        if (p.qty === 0) break;
       }
+      if (placed) i = -1; // Restart with first piece again
     }
 
     if (sheet.pieces.length > 0) {
@@ -131,21 +162,12 @@ function packSheets(pieces, conservativeMode = true) {
       visuals.push([]);
     }
   }
+
   return { sheets, warnings, visuals };
 }
 
-function findFreeSpot(placed, pw, ph) {
-  for (let y = 0; y <= config.sheetHeight - ph; y++) {
-    for (let x = 0; x <= config.sheetWidth - pw; x++) {
-      const overlap = placed.some(rect =>
-        !(x + pw <= rect.x || x >= rect.x + rect.width ||
-          y + ph <= rect.y || y >= rect.y + rect.height)
-      );
-      if (!overlap) return { x, y };
-    }
-  }
-  return null;
-}
+
+
 
 function displayResults(sheets, errors, visuals) {
   const resultsDiv = document.getElementById('results');
@@ -342,5 +364,4 @@ printWindow.document.write('</body></html>');
   };
   document.getElementById('cutDetails').prepend(btn);
 }
-
 
