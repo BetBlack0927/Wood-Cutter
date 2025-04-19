@@ -96,7 +96,8 @@ function packSheets(pieces, conservativeMode = true) {
             y: pos.y,
             width: pw,
             height: ph,
-            label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`
+            label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`,
+            colorKey: `${p.originalWidth}x${p.originalHeight}`
           });
 
           sheet.pieces.push({ piece: p, count: 1, rotated });
@@ -169,9 +170,9 @@ function displayResults(sheets, errors, visuals) {
   }
 
   let tableHTML = `
-    <table class="cut-table">
+    <table class="cut-table" style="border-collapse: collapse; width: 100%; font-family: sans-serif;">
       <tr>
-        <th>Sheet</th>
+        <th style="background:#f2f2f2; padding: 8px; border: 1px solid #ccc; text-align: left;">Sheet</th>
         <th>Pieces</th>
         <th>Cuts</th>
         <th>Edges</th>
@@ -181,7 +182,7 @@ function displayResults(sheets, errors, visuals) {
   sheets.forEach((sheet, index) => {
     tableHTML += `
       <tr>
-        <td>Sheet ${index + 1}</td>
+        <td style="padding: 6px; border: 1px solid #ddd; vertical-align: top;">Sheet ${index + 1}</td>
         <td>
           ${sheet.pieces.map(p => {
             const dims = p.rotated
@@ -204,13 +205,22 @@ function displayResults(sheets, errors, visuals) {
 
   visuals.forEach((vis, index) => {
     const canvas = document.createElement('canvas');
-    canvas.width = 480;
-    canvas.height = 960;
+    canvas.width = 300;
+    canvas.height = 600;
     canvas.style.border = '1px solid #ccc';
+    canvas.style.marginBottom = '10px';
+    canvas.title = 'Hover over pieces to see their size';
     const ctx = canvas.getContext('2d');
 
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const colorMap = {};
+    const colorPalette = [
+      '#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c',
+      '#34495e', '#e67e22', '#7f8c8d', '#d35400', '#16a085', '#2980b9'
+    ];
+    let colorIndex = 0;
 
     vis.forEach(box => {
       const scaleX = canvas.width / config.sheetWidth;
@@ -220,7 +230,12 @@ function displayResults(sheets, errors, visuals) {
       const w = box.width * scaleX;
       const h = box.height * scaleY;
 
-      ctx.fillStyle = '#3498db';
+      if (!colorMap[box.colorKey]) {
+        colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length];
+        colorIndex++;
+      }
+
+      ctx.fillStyle = colorMap[box.colorKey];
       ctx.fillRect(x, y, w, h);
 
       ctx.strokeStyle = '#000';
@@ -229,7 +244,24 @@ function displayResults(sheets, errors, visuals) {
 
       ctx.fillStyle = '#ffffff';
       ctx.font = '10px Arial';
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 9px sans-serif';
       ctx.fillText(box.label, x + 4, y + 12);
+
+      // Tooltip on hover
+      canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const hover = vis.find(b => {
+          const sx = b.x * scaleX;
+          const sy = b.y * scaleY;
+          const sw = b.width * scaleX;
+          const sh = b.height * scaleY;
+          return mx >= sx && mx <= sx + sw && my >= sy && my <= sy + sh;
+        });
+        canvas.title = hover ? hover.label + ` (${hover.width}" × ${hover.height}")` : 'Hover over pieces to see their size';
+      });
     });
 
     detailsDiv.appendChild(document.createElement('hr'));
