@@ -2,6 +2,7 @@ const config = {
   sheetWidth: 48,
   sheetHeight: 96,
   efficientDims: [47.875, 48, 96]
+  kerf: 0.125,
 };
 
 function processInput() {
