@@ -2,7 +2,6 @@ const config = {
   sheetWidth: 48,
   sheetHeight: 96,
   efficientDims: [47.875, 48, 96]
-  kerf: 0.125,
 };
 
 function processInput() {
@@ -16,8 +15,8 @@ function processInput() {
       .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
 
     const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
-    const { sheets, warnings } = packSheets(validPieces);
-    displayResults(sheets, [...errors, ...warnings]);
+    const { sheets, warnings, visuals } = packSheets(validPieces);
+    displayResults(sheets, [...errors, ...warnings], visuals);
 
   } catch (error) {
     console.error("Calculation error:", error);
@@ -64,74 +63,76 @@ function isEfficient(piece) {
 
 function packSheets(pieces) {
   const sheets = [];
+  const visuals = [];
   const warnings = [];
-  let safety = 1000;
   const remaining = JSON.parse(JSON.stringify(pieces)).filter(p => p.qty > 0);
 
-  while (remaining.some(p => p.qty > 0) && safety-- > 0) {
+  while (remaining.some(p => p.qty > 0)) {
     const sheet = {
       pieces: [],
       cuts: 0,
       edges: 0
     };
+    const visual = [];
+    const placedRects = [];
 
-    let y = 0;
+    for (let i = 0; i < remaining.length; i++) {
+      const p = remaining[i];
+      if (p.qty <= 0) continue;
 
-    while (y < config.sheetHeight) {
-      let x = 0;
-      let rowHeight = 0;
-      let fittedThisRow = false;
+      for (const rotated of [false, true]) {
+        const pw = rotated ? p.height : p.width;
+        const ph = rotated ? p.width : p.height;
 
-      for (let i = 0; i < remaining.length; i++) {
-        const p = remaining[i];
-        if (p.qty <= 0) continue;
+        while (p.qty > 0) {
+          const pos = findFreeSpot(placedRects, pw, ph);
+          if (!pos) break;
 
-        for (const rotated of [false, true]) {
-          const pw = rotated ? p.height + config.kerf : p.width + config.kerf;
-          const ph = rotated ? p.width + config.kerf : p.height + config.kerf;
+          placedRects.push({ x: pos.x, y: pos.y, width: pw, height: ph });
 
-          if (x + pw <= config.sheetWidth && y + ph <= config.sheetHeight) {
-            const fitCount = Math.min(Math.floor((config.sheetWidth - x) / pw), p.qty);
+          visual.push({
+            x: pos.x,
+            y: pos.y,
+            width: pw,
+            height: ph,
+            label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`
+          });
 
-            if (fitCount > 0) {
-              sheet.pieces.push({
-                piece: p,
-                count: fitCount,
-                rotated,
-              });
-
-              sheet.cuts += isEfficient(p) ? fitCount : fitCount * 2;
-              sheet.edges += p.edges * fitCount;
-              p.qty -= fitCount;
-              x += pw * fitCount;
-              rowHeight = Math.max(rowHeight, ph);
-              fittedThisRow = true;
-              break;
-            }
-          }
+          sheet.pieces.push({ piece: p, count: 1, rotated });
+          sheet.cuts += isEfficient(p) ? 1 : 2;
+          sheet.edges += p.edges;
+          p.qty--;
         }
+        if (p.qty === 0) break;
       }
-
-      if (!fittedThisRow) break;
-      y += rowHeight;
     }
 
     if (sheet.pieces.length > 0) {
       sheets.push(sheet);
+      visuals.push(visual);
     } else {
       warnings.push("⚠️ Some pieces could not be placed. Check for tight tolerances or odd sizes.");
       break;
     }
   }
 
-  if (safety <= 0) {
-    warnings.push("⚠️ Loop safety limit reached — input too complex or unplaceable.");
-  }
-
-  return { sheets, warnings };
+  return { sheets, warnings, visuals };
 }
 
-function displayResults(sheets, errors) {
+function findFreeSpot(placed, pw, ph) {
+  for (let y = 0; y <= config.sheetHeight - ph; y++) {
+    for (let x = 0; x <= config.sheetWidth - pw; x++) {
+      const overlap = placed.some(rect =>
+        !(x + pw <= rect.x || x >= rect.x + rect.width ||
+          y + ph <= rect.y || y >= rect.y + rect.height)
+      );
+      if (!overlap) return { x, y };
+    }
+  }
+  return null;
+}
+
+function displayResults(sheets, errors, visuals) {
   const resultsDiv = document.getElementById('results');
   const errorsDiv = document.getElementById('errors');
   const detailsDiv = document.getElementById('cutDetails');
@@ -185,9 +186,45 @@ function displayResults(sheets, errors) {
       </tr>
     `;
   });
-
   tableHTML += '</table>';
   detailsDiv.innerHTML = `<h3>Cutting Plan</h3>${tableHTML}`;
+
+  visuals.forEach((vis, index) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 480;
+    canvas.height = 960;
+    canvas.style.border = '1px solid #ccc';
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    vis.forEach(box => {
+      const scaleX = canvas.width / config.sheetWidth;
+      const scaleY = canvas.height / config.sheetHeight;
+      const x = box.x * scaleX;
+      const y = box.y * scaleY;
+      const w = box.width * scaleX;
+      const h = box.height * scaleY;
+      
+      ctx.fillStyle = '#3498db';
+      ctx.fillRect(x, y, w, h);
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '10px Arial';
+      ctx.fillText(box.label, x + 4, y + 12);
+    });
+
+    detailsDiv.appendChild(document.createElement('hr'));
+    const label = document.createElement('h4');
+    label.textContent = `Sheet ${index + 1} Layout:`;
+    detailsDiv.appendChild(label);
+    detailsDiv.appendChild(canvas);
+  });
 }
 
 function clearAll() {
