@@ -204,6 +204,11 @@ function displayResults(sheets, errors, visuals) {
   tableHTML += '</table>';
   detailsDiv.innerHTML = `<h3>Cutting Plan</h3>${tableHTML}`;
 
+  const visualWrapper = document.createElement('div');
+  visualWrapper.style.display = 'flex';
+  visualWrapper.style.flexWrap = 'wrap';
+  visualWrapper.style.gap = '16px';
+
   visuals.forEach((vis, index) => {
     const canvas = document.createElement('canvas');
     canvas.width = 300;
@@ -243,13 +248,10 @@ function displayResults(sheets, errors, visuals) {
       ctx.lineWidth = 1;
       ctx.strokeRect(x, y, w, h);
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '10px Arial';
       ctx.fillStyle = '#000';
       ctx.font = 'bold 9px sans-serif';
       ctx.fillText(box.label, x + 4, y + 12);
 
-      // Tooltip on hover
       canvas.addEventListener('mousemove', e => {
         const rect = canvas.getBoundingClientRect();
         const mx = e.clientX - rect.left;
@@ -265,12 +267,16 @@ function displayResults(sheets, errors, visuals) {
       });
     });
 
-    detailsDiv.appendChild(document.createElement('hr'));
-    const label = document.createElement('h4');
-    label.textContent = `Sheet ${index + 1} Layout:`;
-    detailsDiv.appendChild(label);
-    detailsDiv.appendChild(canvas);
+    const container = document.createElement('div');
+    container.style.flex = '1 1 45%';
+    container.style.minWidth = '300px';
+    container.innerHTML = `<h4>Sheet ${index + 1} Layout:</h4>`;
+    container.appendChild(canvas);
+    visualWrapper.appendChild(container);
   });
+
+  detailsDiv.appendChild(document.createElement('hr'));
+  detailsDiv.appendChild(visualWrapper);
 }
 
 function addPrintButton(visuals) {
@@ -325,9 +331,4 @@ function addPrintButton(visuals) {
   document.getElementById('cutDetails').prepend(btn);
 }
 
-function clearAll() {
-  document.getElementById('bulkInput').value = '';
-  document.getElementById('results').innerHTML = '';
-  document.getElementById('errors').innerHTML = '';
-  document.getElementById('cutDetails').innerHTML = '';
-}
+
