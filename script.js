@@ -33,7 +33,7 @@ function parseInput(text) {
     .filter(line => line.trim())
     .map(line => {
       const [left, right] = line.split('=').map(s => s.trim());
-      const dimPart = left.replace(/"/g, '').toLowerCase();
+      const dimPart = left.replace(/['\"]/g, '').toLowerCase(); // Treat ' and " as inches
       const [widthStr, heightStr] = dimPart.split(/x/);
 
       return {
@@ -86,7 +86,6 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
         const pw = rotated ? p.height : p.width;
         const ph = rotated ? p.width : p.height;
 
-        // Try all rectangles to find the best fit
         let bestFitIndex = -1;
         let minWaste = Infinity;
 
@@ -119,26 +118,30 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
           sheet.edges += p.edges;
           p.qty--;
 
-          // Guillotine split: cut fully right and below
           sheetRects.splice(bestFitIndex, 1);
-          sheetRects.push({
-            x: pos.x + pw,
-            y: pos.y,
-            width: rect.width - pw,
-            height: ph
-          });
-          sheetRects.push({
-            x: pos.x,
-            y: pos.y + ph,
-            width: rect.width,
-            height: rect.height - ph
-          });
+          sheetRects.push({ x: pos.x + pw, y: pos.y, width: rect.width - pw, height: ph });
+          sheetRects.push({ x: pos.x, y: pos.y + ph, width: rect.width, height: rect.height - ph });
 
           placed = true;
+
+          // Conservative mode: limit complexity
+          if (conservativeMode) {
+            const distinctCuts = new Set(sheet.pieces.map(p => 
+              (p.rotated ? p.piece.originalHeight + 'x' + p.piece.originalWidth
+                         : p.piece.originalWidth + 'x' + p.piece.originalHeight)
+            ));
+            const totalPiecesOnSheet = sheet.pieces.reduce((sum, p) => sum + p.count, 0);
+
+            if (distinctCuts.size >= 3 && totalPiecesOnSheet >= 8) {
+              i = remaining.length; // Force break outer for loop to finish sheet
+              break;
+            }
+          }
+
           break;
         }
       }
-      if (placed) i = -1; // Restart with first piece again
+      if (placed) i = -1; // Restart after placement
     }
 
     if (sheet.pieces.length > 0) {
@@ -147,19 +150,6 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
     } else {
       warnings.push("⚠️ Some pieces could not be placed. Check for tight tolerances or odd sizes.");
       break;
-    }
-  }
-
-  if (conservativeMode && sheets.length > 0) {
-    const lastSheet = sheets[sheets.length - 1];
-    const hasShortPiece = lastSheet.pieces.some(p => {
-      const height = p.rotated ? p.piece.width : p.piece.height;
-      return height < config.sheetHeight;
-    });
-    if (lastSheet.pieces.length <= 2 && hasShortPiece) {
-      warnings.push("⚠️ Conservative Mode: 1 extra sheet may be used for easier workflow.");
-      sheets.push({ pieces: [], cuts: 0, edges: 0 });
-      visuals.push([]);
     }
   }
 
@@ -364,4 +354,3 @@ printWindow.document.write('</body></html>');
   };
   document.getElementById('cutDetails').prepend(btn);
 }
-
