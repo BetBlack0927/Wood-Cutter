@@ -70,17 +70,25 @@ function isEfficient(piece) {
 }
 
 function packSheetsGuillotine(pieces, conservativeMode = true) {
+  const standard = tryPacking(pieces, 48, 96, conservativeMode);
+  const rotated = tryPacking(pieces, 96, 48, conservativeMode);
+
+  // Choose the orientation with fewer sheets
+  return standard.sheets.length <= rotated.sheets.length ? standard : rotated;
+}
+
+function tryPacking(originalPieces, sheetWidth, sheetHeight, conservativeMode) {
   const sheets = [];
   const visuals = [];
   const warnings = [];
-  const remaining = JSON.parse(JSON.stringify(pieces)).filter(p => p.qty > 0);
+  const remaining = JSON.parse(JSON.stringify(originalPieces)).filter(p => p.qty > 0);
 
   remaining.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
   while (remaining.some(p => p.qty > 0)) {
     const sheet = { pieces: [], cuts: 0, edges: 0 };
     const visual = [];
-    const sheetRects = [{ x: 0, y: 0, width: config.sheetWidth, height: config.sheetHeight }];
+    const sheetRects = [{ x: 0, y: 0, width: sheetWidth, height: sheetHeight }];
 
     for (let i = 0; i < remaining.length; i++) {
       const p = remaining[i];
@@ -129,16 +137,14 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
 
           placed = true;
 
-          // Conservative mode: limit complexity
           if (conservativeMode) {
-            const distinctCuts = new Set(sheet.pieces.map(p => 
+            const distinctCuts = new Set(sheet.pieces.map(p =>
               (p.rotated ? p.piece.originalHeight + 'x' + p.piece.originalWidth
                          : p.piece.originalWidth + 'x' + p.piece.originalHeight)
             ));
             const totalPiecesOnSheet = sheet.pieces.reduce((sum, p) => sum + p.count, 0);
-
             if (distinctCuts.size >= 3 && totalPiecesOnSheet >= 8) {
-              i = remaining.length; // Force break outer for loop to finish sheet
+              i = remaining.length;
               break;
             }
           }
@@ -146,7 +152,7 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
           break;
         }
       }
-      if (placed) i = -1; // Restart after placement
+      if (placed) i = -1; // Restart
     }
 
     if (sheet.pieces.length > 0) {
@@ -160,6 +166,7 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
 
   return { sheets, warnings, visuals };
 }
+
 
 
 
