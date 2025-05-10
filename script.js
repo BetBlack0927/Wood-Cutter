@@ -5,7 +5,9 @@ const config = {
   efficientDims: [47.875, 48, 96]
 };
 
-  
+function clearAll(){
+  document.getElementById('bulkInput').value = "";
+}
 
 function processInput() {
   const conservative = document.getElementById('conservativeToggle')?.checked;
