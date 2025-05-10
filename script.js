@@ -6,8 +6,7 @@ const config = {
 };
 
 function clearAll(){
-  const input = document.getElementById('bulkInput').value;
-  input.value = "";
+  document.getElementById('bulkInput').value = ";
 }
   
 
