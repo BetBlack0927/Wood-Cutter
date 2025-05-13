@@ -10,7 +10,7 @@ function clearAll(){
 }
 
 function processInput() {
-  const conservative = document.getElementById('conservativeToggle')?.checked;
+  const conservative = false;
   try {
     const input = document.getElementById('bulkInput').value;
     const pieces = parseInput(input);
