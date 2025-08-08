@@ -1,30 +1,24 @@
-// Optimized packing with MaxRects + Auto Strip Mode (KERF-FREE)
-// Drop-in replacement for script.js — no kerf is added anywhere. Your inputs already include blade loss.
-
+// Guillotine-based wood cut calculator (Accurate full-length cuts, smart fit)
 const config = {
   sheetWidth: 48,
   sheetHeight: 96,
-  efficientDims: [47.875, 48, 96],
-  stripModeAuto: true,     // auto-detect uniform-width jobs and pack as columns
-  stripWidthTolerance: 1/32 // treat widths within this tolerance as equal
+  efficientDims: [47.875, 48, 96]
 };
 
-// -------------------- App entry --------------------
 function processInput() {
   const conservative = document.getElementById('conservativeToggle')?.checked;
   try {
     const input = document.getElementById('bulkInput').value;
     const pieces = parseInput(input);
 
-    const tooBig = pieces
+    const errors = pieces
       .filter(p => (p.width > config.sheetWidth && p.height > config.sheetHeight &&
                     p.width > config.sheetHeight && p.height > config.sheetWidth))
       .map(p => `${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`);
 
-    const validPieces = pieces.filter(p => !tooBig.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
-
+    const validPieces = pieces.filter(p => !errors.includes(`${p.originalWidth}" x ${p.originalHeight}" (${p.qty} PCS)`));
     const { sheets, warnings, visuals } = packSheetsGuillotine(validPieces, conservative);
-    displayResults(sheets, [...tooBig, ...warnings], visuals);
+    displayResults(sheets, [...errors, ...warnings], visuals);
     addPrintButton(visuals);
 
   } catch (error) {
@@ -34,39 +28,32 @@ function processInput() {
   }
 }
 
-// -------------------- Parsing --------------------
 function parseInput(text) {
   return text.split('\n')
     .filter(line => line.trim())
     .map(line => {
-      const [left, right] = line.split('=');
-      if (!right) return { originalWidth: '0', originalHeight: '0', width: 0, height: 0, qty: 0, edges: 0 };
-      const dimPart = left.replace(/["']/g, '').toLowerCase();
+      const [left, right] = line.split('=').map(s => s.trim());
+      const dimPart = left.replace(/['\"]/g, '').toLowerCase(); // Treat ' and " as inches
       const [widthStr, heightStr] = dimPart.split(/x/);
 
       return {
-        originalWidth: widthStr?.trim() ?? '0',
-        originalHeight: heightStr?.trim() ?? '0',
-        width: parseFraction(widthStr ?? '0'),
-        height: parseFraction(heightStr ?? '0'),
-        qty: parseInt((right.match(/(\d+)\s*PCS/i) || [])[1] || 0),
-        edges: (right.match(/(\d+)\s*(L|S)/gi) || []).reduce((a, m) => a + parseInt(m), 0)
+        originalWidth: widthStr.trim(),
+        originalHeight: heightStr.trim(),
+        width: parseFraction(widthStr),
+        height: parseFraction(heightStr),
+        qty: parseInt((right.match(/(\d+)PCS/i) || [])[1] || 0),
+        edges: (right.match(/(\d+)(L|S)/gi) || []).reduce((a, m) => a + parseInt(m), 0)
       };
     });
 }
 
 function parseFraction(str) {
-  if (!str) return 0;
   return str.split(/[- ]/).reduce((total, part) => {
     if (part.includes('/')) {
       const [n, d] = part.split('/');
-      const num = parseFloat(n);
-      const den = parseFloat(d);
-      if (!isNaN(num) && !isNaN(den) && den !== 0) return total + (num / den);
-      return total;
+      return total + (parseFloat(n) / parseFloat(d));
     }
-    const val = parseFloat(part);
-    return total + (isNaN(val) ? 0 : val);
+    return total + (parseFloat(part) || 0);
   }, 0);
 }
 
@@ -77,237 +64,102 @@ function isEfficient(piece) {
   );
 }
 
-// -------------------- Strip mode (uniform width) --------------------
-function detectCommonWidth(pieces) {
-  // Flatten quantities and compute most common width within tolerance
-  const counts = new Map();
-  let totalQty = 0;
-  for (const p of pieces) {
-    totalQty += p.qty;
-    const rounded = Math.round(p.width / config.stripWidthTolerance) * config.stripWidthTolerance;
-    const key = rounded.toFixed(4);
-    counts.set(key, (counts.get(key) || 0) + p.qty);
-  }
-  let bestKey = null, bestCount = 0;
-  for (const [k, c] of counts) { if (c > bestCount) { bestKey = k; bestCount = c; } }
-  const ratio = totalQty === 0 ? 0 : bestCount / totalQty;
-  const commonWidth = bestKey ? parseFloat(bestKey) : null;
-  return { commonWidth, ratio };
-}
 
-function packSheetsStripMode(pieces, conservativeMode = true) {
-  const { commonWidth, ratio } = detectCommonWidth(pieces);
-  if (!commonWidth) return null;
-  const tol = config.stripWidthTolerance + 1e-6;
-
-  const stripItems = [];
-  const otherItems = [];
-  for (const p of pieces) {
-    const isStrip = Math.abs(p.width - commonWidth) <= tol;
-    if (isStrip) {
-      for (let i = 0; i < p.qty; i++) stripItems.push({ ...p });
-    } else {
-      otherItems.push({ ...p });
-    }
-  }
-
-  // Only trigger strip mode if it will materially help
-  if (!config.stripModeAuto || stripItems.length === 0 || ratio < 0.7) return null;
-
-  // How many columns per sheet can we fit? (no kerf spacing)
-  const perCol = commonWidth;
-  let columnsPerSheet = Math.max(1, Math.floor((config.sheetWidth) / perCol));
-  while (columnsPerSheet * commonWidth > config.sheetWidth + 1e-6 && columnsPerSheet > 1) columnsPerSheet--;
-
-  // Sort by height descending (treat as strips)
-  stripItems.sort((a, b) => b.height - a.height);
-
+function packSheetsGuillotine(pieces, conservativeMode = true) {
   const sheets = [];
   const visuals = [];
-  let i = 0;
+  const warnings = [];
+  const remaining = JSON.parse(JSON.stringify(pieces)).filter(p => p.qty > 0);
 
-  while (i < stripItems.length) {
-    const columns = Array.from({ length: columnsPerSheet }, () => ({ used: 0, parts: [] }));
+  remaining.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 
-    // First-fit decreasing per column (no vertical kerf)
-    for (let j = i; j < stripItems.length; j++) {
-      const item = stripItems[j];
+  while (remaining.some(p => p.qty > 0)) {
+    const sheet = { pieces: [], cuts: 0, edges: 0 };
+    const visual = [];
+    const sheetRects = [{ x: 0, y: 0, width: config.sheetWidth, height: config.sheetHeight }];
+
+    for (let i = 0; i < remaining.length; i++) {
+      const p = remaining[i];
+      if (p.qty <= 0) continue;
+
       let placed = false;
-      for (const col of columns) {
-        if (col.used + item.height <= config.sheetHeight + 1e-6) {
-          const y = col.used;
-          col.parts.push({ item, x: 0, y, width: commonWidth, height: item.height });
-          col.used = y + item.height;
-          [stripItems[j], stripItems[i]] = [stripItems[i], stripItems[j]];
-          i++;
+      for (const rotated of [false, true]) {
+        const pw = rotated ? p.height : p.width;
+        const ph = rotated ? p.width : p.height;
+
+        let bestFitIndex = -1;
+        let minWaste = Infinity;
+
+        for (let r = 0; r < sheetRects.length; r++) {
+          const rect = sheetRects[r];
+          if (pw <= rect.width && ph <= rect.height) {
+            const waste = (rect.width * rect.height) - (pw * ph);
+            if (waste < minWaste) {
+              minWaste = waste;
+              bestFitIndex = r;
+            }
+          }
+        }
+
+        if (bestFitIndex >= 0) {
+          const rect = sheetRects[bestFitIndex];
+          const pos = { x: rect.x, y: rect.y };
+
+          visual.push({
+            x: pos.x,
+            y: pos.y,
+            width: pw,
+            height: ph,
+            label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`,
+            colorKey: `${p.originalWidth}x${p.originalHeight}`
+          });
+
+          sheet.pieces.push({ piece: p, count: 1, rotated });
+          sheet.cuts += isEfficient(p) ? 1 : 2;
+          sheet.edges += p.edges;
+          p.qty--;
+
+          sheetRects.splice(bestFitIndex, 1);
+          sheetRects.push({ x: pos.x + pw, y: pos.y, width: rect.width - pw, height: ph });
+          sheetRects.push({ x: pos.x, y: pos.y + ph, width: rect.width, height: rect.height - ph });
+
           placed = true;
+
+          // Conservative mode: limit complexity
+          if (conservativeMode) {
+            const distinctCuts = new Set(sheet.pieces.map(p => 
+              (p.rotated ? p.piece.originalHeight + 'x' + p.piece.originalWidth
+                         : p.piece.originalWidth + 'x' + p.piece.originalHeight)
+            ));
+            const totalPiecesOnSheet = sheet.pieces.reduce((sum, p) => sum + p.count, 0);
+
+            if (distinctCuts.size >= 3 && totalPiecesOnSheet >= 8) {
+              i = remaining.length; // Force break outer for loop to finish sheet
+              break;
+            }
+          }
+
           break;
         }
       }
-      if (i >= stripItems.length) break;
+      if (placed) i = -1; // Restart after placement
     }
 
-    const placedCount = columns.reduce((a, c) => a + c.parts.length, 0);
-    if (placedCount === 0) break;
-
-    const sheetPiecesMap = new Map();
-    const vis = [];
-    columns.forEach((col, colIdx) => {
-      const xOffset = colIdx * commonWidth; // no kerf spacing drawn or used
-      col.parts.forEach(p => {
-        vis.push({ x: xOffset, y: p.y, width: p.width, height: p.height, label: `1PCS ${p.item.originalWidth}×${p.item.originalHeight}`, colorKey: `${p.item.originalWidth}x${p.item.originalHeight}` });
-        const key = `${p.item.originalWidth}×${p.item.originalHeight}`;
-        const rec = sheetPiecesMap.get(key) || { piece: p.item, rotated: false, count: 0 };
-        rec.count += 1;
-        sheetPiecesMap.set(key, rec);
-      });
-    });
-
-    const sheetPieces = Array.from(sheetPiecesMap.values());
-    const cuts = sheetPieces.reduce((acc, rec) => acc + (isEfficient(rec.piece) ? rec.count : rec.count * 2), 0);
-    const edges = sheetPieces.reduce((acc, rec) => acc + (rec.piece.edges || 0) * rec.count, 0);
-    sheets.push({ pieces: sheetPieces, cuts, edges });
-    visuals.push(vis);
-  }
-
-  const remaining = [];
-  for (let k = i; k < stripItems.length; k++) { remaining.push(stripItems[k]); }
-  remaining.push(...otherItems);
-  return { sheets, visuals, remaining };
-}
-
-// -------------------- MaxRects core (kerf-free) --------------------
-class MaxRectsBin {
-  constructor(width, height) {
-    this.binWidth = width;
-    this.binHeight = height;
-    this.freeRects = [{ x: 0, y: 0, width, height }];
-    this.usedRects = [];
-  }
-  _fits(w, h, rect) { return w <= rect.width && h <= rect.height; }
-  insert(width, height, allowRotate = true) {
-    let bestNode = null; let bestShortSide = Infinity; let bestLongSide = Infinity; let rotated = false;
-    for (const rect of this.freeRects) {
-      if (this._fits(width, height, rect)) {
-        const leftoverHoriz = Math.abs(rect.width - width);
-        const leftoverVert = Math.abs(rect.height - height);
-        const shortSide = Math.min(leftoverHoriz, leftoverVert);
-        const longSide = Math.max(leftoverHoriz, leftoverVert);
-        if (shortSide < bestShortSide || (shortSide === bestShortSide && longSide < bestLongSide)) {
-          bestNode = { x: rect.x, y: rect.y, width, height }; rotated = false; bestShortSide = shortSide; bestLongSide = longSide;
-        }
-      }
-      if (allowRotate && this._fits(height, width, rect)) {
-        const leftoverHoriz = Math.abs(rect.width - height);
-        const leftoverVert = Math.abs(rect.height - width);
-        const shortSide = Math.min(leftoverHoriz, leftoverVert);
-        const longSide = Math.max(leftoverHoriz, leftoverVert);
-        if (shortSide < bestShortSide || (shortSide === bestShortSide && longSide < bestLongSide)) {
-          bestNode = { x: rect.x, y: rect.y, width: height, height: width }; rotated = true; bestShortSide = shortSide; bestLongSide = longSide;
-        }
-      }
-    }
-    if (!bestNode) return null;
-    this._place(bestNode);
-    return { ...bestNode, rotated };
-  }
-  _place(node) {
-    const consume = { x: node.x, y: node.y, width: node.width, height: node.height };
-    const newFree = [];
-    for (const rect of this.freeRects) {
-      if (!this._overlaps(consume, rect)) { newFree.push(rect); continue; }
-      this._splitFreeNode(rect, consume, newFree);
-    }
-    this.freeRects = newFree; this._pruneFreeList(); this.usedRects.push({ ...node });
-  }
-  _overlaps(a, b) { return !(a.x + a.width <= b.x || a.x >= b.x + b.width || a.y + a.height <= b.y || a.y >= b.y + b.height); }
-  _splitFreeNode(free, used, out) {
-    if (used.y > free.y && used.y < free.y + free.height) out.push({ x: free.x, y: free.y, width: free.width, height: used.y - free.y });
-    if (used.y + used.height < free.y + free.height) out.push({ x: free.x, y: used.y + used.height, width: free.width, height: (free.y + free.height) - (used.y + used.height) });
-    if (used.x > free.x && used.x < free.x + free.width) out.push({ x: free.x, y: Math.max(free.y, used.y), width: used.x - free.x, height: Math.min(free.y + free.height, used.y + used.height) - Math.max(free.y, used.y) });
-    if (used.x + used.width < free.x + free.width) out.push({ x: used.x + used.width, y: Math.max(free.y, used.y), width: (free.x + free.width) - (used.x + used.width), height: Math.min(free.y + free.height, used.y + used.height) - Math.max(free.y, used.y) });
-  }
-  _pruneFreeList() {
-    for (let i = 0; i < this.freeRects.length; i++) {
-      for (let j = i + 1; j < this.freeRects.length; j++) {
-        const a = this.freeRects[i], b = this.freeRects[j];
-        if (this._containedIn(a, b)) { this.freeRects.splice(i, 1); i--; break; }
-        if (this._containedIn(b, a)) { this.freeRects.splice(j, 1); j--; }
-      }
-    }
-  }
-  _containedIn(a, b) { return a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height; }
-}
-
-// -------------------- Orchestrator --------------------
-function packSheetsGuillotine(pieces, conservativeMode = true) {
-  const warnings = [];
-  const visuals = [];
-  const sheets = [];
-
-  // Try strip mode first if applicable
-  const stripResult = packSheetsStripMode(pieces, conservativeMode);
-  let remaining = [];
-  if (stripResult) {
-    if (stripResult.sheets.length) {
-      sheets.push(...stripResult.sheets);
-      visuals.push(...stripResult.visuals);
-    }
-    remaining = stripResult.remaining;
-  } else {
-    remaining = [];
-    pieces.forEach(p => { for (let i = 0; i < p.qty; i++) remaining.push({ ...p }); });
-  }
-
-  // MaxRects on the rest
-  if (remaining.length) {
-    remaining.sort((a, b) => Math.max(b.width, b.height) - Math.max(a.width, a.height) || (b.width * b.height) - (a.width * a.height));
-
-    let idx = 0;
-    while (idx < remaining.length) {
-      const bin = new MaxRectsBin(config.sheetWidth, config.sheetHeight);
-      const placed = [];
-      const distinctDims = new Set();
-
-      for (let j = idx; j < remaining.length; j++) {
-        const p = remaining[j];
-        if (conservativeMode) {
-          const key1 = `${p.originalWidth}×${p.originalHeight}`;
-          const key2 = `${p.originalHeight}×${p.originalWidth}`;
-          if (distinctDims.size >= 6 && !distinctDims.has(key1) && !distinctDims.has(key2)) continue;
-        }
-        const node = bin.insert(p.width, p.height, true);
-        if (node) {
-          placed.push({ x: node.x, y: node.y, width: node.width, height: node.height, label: `1PCS ${p.originalWidth}×${p.originalHeight}`, colorKey: `${p.originalWidth}x${p.originalHeight}`, piece: p, rotated: !(Math.abs(node.width - p.width) < 1e-4 && Math.abs(node.height - p.height) < 1e-4) });
-          distinctDims.add(`${p.originalWidth}×${p.originalHeight}`);
-          [remaining[j], remaining[idx]] = [remaining[idx], remaining[j]];
-          idx++;
-        }
-      }
-
-      if (placed.length === 0) { warnings.push("⚠️ Some pieces could not be placed. Check for tight tolerances or odd sizes."); break; }
-
-      const pieceMap = new Map();
-      placed.forEach(pl => {
-        const key = `${pl.piece.originalWidth}×${pl.piece.originalHeight}×${pl.rotated ? 'R' : 'N'}`;
-        const rec = pieceMap.get(key) || { piece: pl.piece, rotated: pl.rotated, count: 0 };
-        rec.count += 1; pieceMap.set(key, rec);
-      });
-      const sheetPieces = Array.from(pieceMap.values());
-      const cuts = sheetPieces.reduce((acc, rec) => acc + (isEfficient(rec.piece) ? rec.count : rec.count * 2), 0);
-      const edges = sheetPieces.reduce((acc, rec) => acc + (rec.piece.edges || 0) * rec.count, 0);
-      sheets.push({ pieces: sheetPieces, cuts, edges });
-      const vis = placed.map(pl => ({ x: pl.x, y: pl.y, width: pl.width, height: pl.height, label: `1PCS ${pl.piece.originalWidth}×${pl.piece.originalHeight}`, colorKey: `${pl.piece.originalWidth}x${pl.piece.originalHeight}` }));
-      visuals.push(vis);
-
-      if (sheets.length > 200) { warnings.push('⚠️ Aborting: too many sheets generated.'); break; }
+    if (sheet.pieces.length > 0) {
+      sheets.push(sheet);
+      visuals.push(visual);
+    } else {
+      warnings.push("⚠️ Some pieces could not be placed. Check for tight tolerances or odd sizes.");
+      break;
     }
   }
 
   return { sheets, warnings, visuals };
 }
 
-// -------------------- Rendering (unchanged) --------------------
+
+
+
 function displayResults(sheets, errors, visuals) {
   const resultsDiv = document.getElementById('results');
   const errorsDiv = document.getElementById('errors');
@@ -348,11 +200,13 @@ function displayResults(sheets, errors, visuals) {
         <td>
           ${sheet.pieces.map(p => {
             const dims = p.rotated
-              ? `${p.piece.originalHeight}\"×${p.piece.originalWidth}\"`
-              : `${p.piece.originalWidth}\"×${p.piece.originalHeight}\"`;
+              ? `${p.piece.originalHeight}"×${p.piece.originalWidth}"`
+              : `${p.piece.originalWidth}"×${p.piece.originalHeight}"`;
             const edgeStr = p.piece.edges > 0 ? ` ${p.piece.edges} EDGE` : '';
             return `${p.count}PCS ${dims}${edgeStr}
-              <span class="${isEfficient(p.piece) ? 'efficient' : 'inefficient'}">(${isEfficient(p.piece) ? '1-cut' : '2-cut'})</span>`;
+              <span class="${isEfficient(p.piece) ? 'efficient' : 'inefficient'}">
+                (${isEfficient(p.piece) ? '1-cut' : '2-cut'})
+              </span>`;
           }).join('<br>')}
         </td>
         <td>${sheet.cuts}</td>
@@ -370,7 +224,8 @@ function displayResults(sheets, errors, visuals) {
 
   visuals.forEach((vis, index) => {
     const canvas = document.createElement('canvas');
-    canvas.width = 300; canvas.height = 600;
+    canvas.width = 300;
+    canvas.height = 600;
     canvas.style.border = '1px solid #ccc';
     canvas.style.marginBottom = '10px';
     canvas.title = 'Hover over pieces to see their size';
@@ -379,28 +234,55 @@ function displayResults(sheets, errors, visuals) {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const colorMap = {}; const colorPalette = ['#3498db','#e74c3c','#2ecc71','#f39c12','#9b59b6','#1abc9c','#34495e','#e67e22','#7f8c8d','#d35400','#16a085','#2980b9'];
+    const colorMap = {};
+    const colorPalette = [
+      '#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c',
+      '#34495e', '#e67e22', '#7f8c8d', '#d35400', '#16a085', '#2980b9'
+    ];
     let colorIndex = 0;
 
     vis.forEach(box => {
       const scaleX = canvas.width / config.sheetWidth;
       const scaleY = canvas.height / config.sheetHeight;
-      const x = box.x * scaleX; const y = box.y * scaleY; const w = box.width * scaleX; const h = box.height * scaleY;
-      if (!colorMap[box.colorKey]) { colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length]; colorIndex++; }
-      ctx.fillStyle = colorMap[box.colorKey]; ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = '#000'; ctx.font = 'bold 9px sans-serif'; ctx.fillText(box.label, x + 4, y + 12);
+      const x = box.x * scaleX;
+      const y = box.y * scaleY;
+      const w = box.width * scaleX;
+      const h = box.height * scaleY;
+
+      if (!colorMap[box.colorKey]) {
+        colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length];
+        colorIndex++;
+      }
+
+      ctx.fillStyle = colorMap[box.colorKey];
+      ctx.fillRect(x, y, w, h);
+
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.fillText(box.label, x + 4, y + 12);
+
       canvas.addEventListener('mousemove', e => {
-        const rect = canvas.getBoundingClientRect(); const mx = e.clientX - rect.left; const my = e.clientY - rect.top;
-        const hover = vis.find(b => { const sx = b.x * scaleX; const sy = b.y * scaleY; const sw = b.width * scaleX; const sh = b.height * scaleY; return mx >= sx && mx <= sx + sw && my >= sy && my <= sy + sh; });
-        canvas.title = hover ? hover.label + ` (${hover.width}\" × ${hover.height}\")` : 'Hover over pieces to see their size';
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const hover = vis.find(b => {
+          const sx = b.x * scaleX;
+          const sy = b.y * scaleY;
+          const sw = b.width * scaleX;
+          const sh = b.height * scaleY;
+          return mx >= sx && mx <= sx + sw && my >= sy && my <= sy + sh;
+        });
+        canvas.title = hover ? hover.label + ` (${hover.width}" × ${hover.height}")` : 'Hover over pieces to see their size';
       });
     });
 
     const container = document.createElement('div');
     container.style.flex = '1 1 45%';
     container.style.minWidth = '300px';
-    container.className = 'canvas-card';
     container.innerHTML = `<h4>Sheet ${index + 1} Layout:</h4>`;
     container.appendChild(canvas);
     visualWrapper.appendChild(container);
@@ -411,55 +293,65 @@ function displayResults(sheets, errors, visuals) {
 }
 
 function addPrintButton(visuals) {
-  const existing = document.getElementById('printBtn'); if (existing) existing.remove();
+  const existing = document.getElementById('printBtn');
+  if (existing) existing.remove();
   const btn = document.createElement('button');
-  btn.id = 'printBtn'; btn.textContent = 'Print Layout'; btn.style.margin = '10px 0';
+  btn.id = 'printBtn';
+  btn.textContent = 'Print Layout';
+  btn.style.margin = '10px 0';
   btn.onclick = () => {
     const printWindow = window.open('', '_blank');
     printWindow.document.write('<html><head><title>Print Layout</title></head><body style="font-family:sans-serif;">');
     printWindow.document.write('<h2>Wood Cut Sheet Layout</h2>');
-    const table = document.querySelector('.cut-table'); let tableHTML = '';
+    const table = document.querySelector('.cut-table');
+    let tableHTML = '';
     if (table) {
       tableHTML = '<table style="border-collapse: collapse; width: 100%; font-family: sans-serif;">' +
-        table.innerHTML.replace(/<th>/g, '<th style="background:#f2f2f2; padding: 8px; border: 1px solid #ccc; text-align: left;">').replace(/<td>/g, '<td style="padding: 6px; border: 1px solid #ddd; vertical-align: top;">') + '</table>';
+        table.innerHTML.replace(/<th>/g, '<th style="background:#f2f2f2; padding: 8px; border: 1px solid #ccc; text-align: left;">')
+                        .replace(/<td>/g, '<td style="padding: 6px; border: 1px solid #ddd; vertical-align: top;">') +
+        '</table>';
     }
-    if (tableHTML) printWindow.document.write('<div style="margin-bottom:20px;">' + tableHTML + '</div>');
+    if (tableHTML) {
+      printWindow.document.write('<div style="margin-bottom:20px;">' + tableHTML + '</div>');
+    }
     visuals.forEach((vis, i) => {
-      const canvas = document.createElement('canvas'); canvas.width = 350; canvas.height = 480; const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      const scaleX = canvas.width / config.sheetWidth; const scaleY = canvas.height / config.sheetHeight; const colorMap = {}; const colorPalette = ['#3498db','#e74c3c','#2ecc71','#f39c12','#9b59b6','#1abc9c','#34495e','#e67e22']; let colorIndex = 0;
-      vis.forEach(box => { if (!colorMap[box.colorKey]) { colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length]; colorIndex++; }
-        const x = box.x * scaleX; const y = box.y * scaleY; const w = box.width * scaleX; const h = box.height * scaleY; ctx.fillStyle = colorMap[box.colorKey]; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h); ctx.fillStyle = '#000'; ctx.font = '9px sans-serif'; ctx.fillText(box.label, x + 2, y + 10); });
+      const canvas = document.createElement('canvas');
+      canvas.width = 350;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const scaleX = canvas.width / config.sheetWidth;
+      const scaleY = canvas.height / config.sheetHeight;
+      const colorMap = {};
+      const colorPalette = ['#3498db','#e74c3c','#2ecc71','#f39c12','#9b59b6','#1abc9c','#34495e','#e67e22'];
+      let colorIndex = 0;
+      vis.forEach(box => {
+        if (!colorMap[box.colorKey]) {
+          colorMap[box.colorKey] = colorPalette[colorIndex % colorPalette.length];
+          colorIndex++;
+        }
+        const x = box.x * scaleX;
+        const y = box.y * scaleY;
+        const w = box.width * scaleX;
+        const h = box.height * scaleY;
+        ctx.fillStyle = colorMap[box.colorKey];
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle = '#000';
+        ctx.font = '9px sans-serif';
+        ctx.fillText(box.label, x + 2, y + 10);
+      });
       const imgURL = canvas.toDataURL();
       printWindow.document.write(`<div style="display:inline-block; width:48%; margin:5px; border:1px solid #999; padding:10px;"><h4>Sheet ${i + 1}</h4><img src="${imgURL}" style="width:100%; border:1px solid #ccc;"></div>`);
     });
     printWindow.document.write('<hr style="margin:20px 0; border-top: 2px dashed #ccc;">');
-    printWindow.document.write('</body></html>');
-    printWindow.document.close(); printWindow.focus(); setTimeout(() => printWindow.print(), 500);
+printWindow.document.write('</body></html>');
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 500);
   };
   document.getElementById('cutDetails').prepend(btn);
-}
-
-// -------------------- Live input validation --------------------
-document.addEventListener("DOMContentLoaded", () => {
-  const input = document.getElementById("bulkInput");
-  input?.addEventListener("input", validateLiveInput);
-});
-
-function validateLiveInput() {
-  const text = document.getElementById("bulkInput").value;
-  const lines = text.split("\n");
-  const warnings = [];
-
-  lines.forEach((line, idx) => {
-    const lineNum = idx + 1; const trimmed = line.trim(); if (!trimmed) return;
-    const parts = trimmed.split("="); if (parts.length < 2) { warnings.push(`Line ${lineNum}: missing '=' sign`); return; }
-    const [dim, rest] = parts;
-    if (!/\d.*x.*\d/i.test(dim)) warnings.push(`Line ${lineNum}: invalid dimension format`);
-    if (!/\d+\s*pcs/i.test(rest)) warnings.push(`Line ${lineNum}: missing PCS (quantity)`);
-    const badEdge = rest.match(/(\d+)\s*(edge|edges)/i); if (badEdge) warnings.push(`Line ${lineNum}: malformed edge — use '1L EDGE' or '2S EDGE' instead of '${badEdge[0]}'`);
-  });
-
-  const errBox = document.getElementById("liveErrors") || (() => { const box = document.createElement("div"); box.id = "liveErrors"; document.getElementById("bulkInput").insertAdjacentElement("afterend", box); return box; })();
-  errBox.innerHTML = warnings.length ? `<ul>${warnings.map(w => `<li>❌ ${w}</li>`).join("")}</ul>` : "";
 }
