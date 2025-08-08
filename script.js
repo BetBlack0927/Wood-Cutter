@@ -1,11 +1,10 @@
-// Optimized packing with MaxRects + Auto Strip Mode for uniform-width parts
-// Drop-in replacement for your old script.js
+// Optimized packing with MaxRects + Auto Strip Mode (KERF-FREE)
+// Drop-in replacement for script.js — no kerf is added anywhere. Your inputs already include blade loss.
 
 const config = {
   sheetWidth: 48,
   sheetHeight: 96,
   efficientDims: [47.875, 48, 96],
-  kerf: 0,                 // saw blade thickness in inches
   stripModeAuto: true,     // auto-detect uniform-width jobs and pack as columns
   stripWidthTolerance: 1/32 // treat widths within this tolerance as equal
 };
@@ -97,7 +96,6 @@ function detectCommonWidth(pieces) {
 }
 
 function packSheetsStripMode(pieces, conservativeMode = true) {
-  // Only pack items whose width ~ commonWidth; others returned for fallback
   const { commonWidth, ratio } = detectCommonWidth(pieces);
   if (!commonWidth) return null;
   const tol = config.stripWidthTolerance + 1e-6;
@@ -116,10 +114,9 @@ function packSheetsStripMode(pieces, conservativeMode = true) {
   // Only trigger strip mode if it will materially help
   if (!config.stripModeAuto || stripItems.length === 0 || ratio < 0.7) return null;
 
-  // How many columns per sheet can we fit?
-  const perCol = commonWidth + (config.kerf || 0);
-  let columnsPerSheet = Math.max(1, Math.floor((config.sheetWidth + (config.kerf || 0)) / perCol));
-  // Safety for tiny floating errors
+  // How many columns per sheet can we fit? (no kerf spacing)
+  const perCol = commonWidth;
+  let columnsPerSheet = Math.max(1, Math.floor((config.sheetWidth) / perCol));
   while (columnsPerSheet * commonWidth > config.sheetWidth + 1e-6 && columnsPerSheet > 1) columnsPerSheet--;
 
   // Sort by height descending (treat as strips)
@@ -130,19 +127,17 @@ function packSheetsStripMode(pieces, conservativeMode = true) {
   let i = 0;
 
   while (i < stripItems.length) {
-    // Build columns for this sheet
     const columns = Array.from({ length: columnsPerSheet }, () => ({ used: 0, parts: [] }));
 
-    // First-fit decreasing per column
+    // First-fit decreasing per column (no vertical kerf)
     for (let j = i; j < stripItems.length; j++) {
       const item = stripItems[j];
       let placed = false;
       for (const col of columns) {
-        if (col.used + item.height + (col.parts.length ? (config.kerf || 0) : 0) <= config.sheetHeight + 1e-6) {
-          const y = col.used + (col.parts.length ? (config.kerf || 0) : 0);
+        if (col.used + item.height <= config.sheetHeight + 1e-6) {
+          const y = col.used;
           col.parts.push({ item, x: 0, y, width: commonWidth, height: item.height });
           col.used = y + item.height;
-          // consume this element
           [stripItems[j], stripItems[i]] = [stripItems[i], stripItems[j]];
           i++;
           placed = true;
@@ -150,18 +145,15 @@ function packSheetsStripMode(pieces, conservativeMode = true) {
         }
       }
       if (i >= stripItems.length) break;
-      // if not placed, continue to next j (may fit in later columns in same pass)
     }
 
-    // If nothing placed (very tall single piece), bail to avoid infinite loop
     const placedCount = columns.reduce((a, c) => a + c.parts.length, 0);
     if (placedCount === 0) break;
 
-    // Compute per-sheet aggregates and visuals
     const sheetPiecesMap = new Map();
     const vis = [];
     columns.forEach((col, colIdx) => {
-      const xOffset = colIdx * commonWidth; // kerf isn't drawn; it's consumed in spacing
+      const xOffset = colIdx * commonWidth; // no kerf spacing drawn or used
       col.parts.forEach(p => {
         vis.push({ x: xOffset, y: p.y, width: p.width, height: p.height, label: `1PCS ${p.item.originalWidth}×${p.item.originalHeight}`, colorKey: `${p.item.originalWidth}x${p.item.originalHeight}` });
         const key = `${p.item.originalWidth}×${p.item.originalHeight}`;
@@ -178,22 +170,17 @@ function packSheetsStripMode(pieces, conservativeMode = true) {
     visuals.push(vis);
   }
 
-  // Return whatever wasn't packed so MaxRects can try
   const remaining = [];
-  // Add leftover stripItems (if loop broke early)
   for (let k = i; k < stripItems.length; k++) { remaining.push(stripItems[k]); }
-  // Add otherItems
   remaining.push(...otherItems);
-
   return { sheets, visuals, remaining };
 }
 
-// -------------------- MaxRects core --------------------
+// -------------------- MaxRects core (kerf-free) --------------------
 class MaxRectsBin {
-  constructor(width, height, kerf = 0) {
+  constructor(width, height) {
     this.binWidth = width;
     this.binHeight = height;
-    this.kerf = kerf;
     this.freeRects = [{ x: 0, y: 0, width, height }];
     this.usedRects = [];
   }
@@ -201,18 +188,18 @@ class MaxRectsBin {
   insert(width, height, allowRotate = true) {
     let bestNode = null; let bestShortSide = Infinity; let bestLongSide = Infinity; let rotated = false;
     for (const rect of this.freeRects) {
-      if (this._fits(width + this.kerf, height + this.kerf, rect)) {
-        const leftoverHoriz = Math.abs(rect.width - (width + this.kerf));
-        const leftoverVert = Math.abs(rect.height - (height + this.kerf));
+      if (this._fits(width, height, rect)) {
+        const leftoverHoriz = Math.abs(rect.width - width);
+        const leftoverVert = Math.abs(rect.height - height);
         const shortSide = Math.min(leftoverHoriz, leftoverVert);
         const longSide = Math.max(leftoverHoriz, leftoverVert);
         if (shortSide < bestShortSide || (shortSide === bestShortSide && longSide < bestLongSide)) {
           bestNode = { x: rect.x, y: rect.y, width, height }; rotated = false; bestShortSide = shortSide; bestLongSide = longSide;
         }
       }
-      if (allowRotate && this._fits(height + this.kerf, width + this.kerf, rect)) {
-        const leftoverHoriz = Math.abs(rect.width - (height + this.kerf));
-        const leftoverVert = Math.abs(rect.height - (width + this.kerf));
+      if (allowRotate && this._fits(height, width, rect)) {
+        const leftoverHoriz = Math.abs(rect.width - height);
+        const leftoverVert = Math.abs(rect.height - width);
         const shortSide = Math.min(leftoverHoriz, leftoverVert);
         const longSide = Math.max(leftoverHoriz, leftoverVert);
         if (shortSide < bestShortSide || (shortSide === bestShortSide && longSide < bestLongSide)) {
@@ -225,7 +212,7 @@ class MaxRectsBin {
     return { ...bestNode, rotated };
   }
   _place(node) {
-    const consume = { x: node.x, y: node.y, width: node.width + this.kerf, height: node.height + this.kerf };
+    const consume = { x: node.x, y: node.y, width: node.width, height: node.height };
     const newFree = [];
     for (const rect of this.freeRects) {
       if (!this._overlaps(consume, rect)) { newFree.push(rect); continue; }
@@ -268,19 +255,17 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
     }
     remaining = stripResult.remaining;
   } else {
-    // explode quantities if strip mode not used at all
     remaining = [];
     pieces.forEach(p => { for (let i = 0; i < p.qty; i++) remaining.push({ ...p }); });
   }
 
   // MaxRects on the rest
   if (remaining.length) {
-    // Sort by max dimension, then area (descending)
     remaining.sort((a, b) => Math.max(b.width, b.height) - Math.max(a.width, a.height) || (b.width * b.height) - (a.width * a.height));
 
     let idx = 0;
     while (idx < remaining.length) {
-      const bin = new MaxRectsBin(config.sheetWidth, config.sheetHeight, config.kerf);
+      const bin = new MaxRectsBin(config.sheetWidth, config.sheetHeight);
       const placed = [];
       const distinctDims = new Set();
 
@@ -455,7 +440,7 @@ function addPrintButton(visuals) {
   document.getElementById('cutDetails').prepend(btn);
 }
 
-// -------------------- Live input validation (from earlier step) --------------------
+// -------------------- Live input validation --------------------
 document.addEventListener("DOMContentLoaded", () => {
   const input = document.getElementById("bulkInput");
   input?.addEventListener("input", validateLiveInput);
