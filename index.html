@@ -44,5 +44,16 @@ Example:
   </footer>
 
   <script src="script.js"></script>
+
+  <!-- Clear button handler -->
+  <script>
+    function clearAll() {
+      document.getElementById('bulkInput').value = '';
+      document.getElementById('results').innerHTML = '';
+      document.getElementById('errors').innerHTML = '';
+      document.getElementById('cutDetails').innerHTML = '';
+      document.getElementById('conservativeToggle').checked = true; // keep it checked (optional)
+    }
+  </script>
 </body>
 </html>
