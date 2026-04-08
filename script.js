@@ -64,14 +64,41 @@ function isEfficient(piece) {
   );
 }
 
+/** After a guillotine place of pw×ph in rect at bottom-left, score the split (avoid narrow slivers). */
+function guillotineSplitScore(rect, pw, ph) {
+  const rightArea = (rect.width - pw) * ph;
+  const bottomArea = rect.width * (rect.height - ph);
+  const maxLargest = Math.max(rightArea, bottomArea);
+  const minLargest = Math.min(rightArea, bottomArea);
+  const waste = rect.width * rect.height - pw * ph;
+  return { maxLargest, minLargest, waste };
+}
 
-function packSheetsGuillotine(pieces, conservativeMode = true) {
+/** Prefer larger max child region, then less waste, then larger second child, stable rect index. */
+function compareGuillotineChoices(a, b) {
+  if (b.maxLargest !== a.maxLargest) return b.maxLargest - a.maxLargest;
+  if (a.waste !== b.waste) return a.waste - b.waste;
+  if (b.minLargest !== a.minLargest) return b.minLargest - a.minLargest;
+  return a.rectIndex - b.rectIndex;
+}
+
+function totalCuts(sheets) {
+  return sheets.reduce((sum, s) => sum + s.cuts, 0);
+}
+
+const PACK_SORT_STRATEGIES = [
+  (a, b) => (b.width * b.height) - (a.width * a.height),
+  (a, b) => Math.max(b.width, b.height) - Math.max(a.width, a.height),
+  (a, b) => b.width - a.width,
+  (a, b) => b.height - a.height
+];
+
+function packSheetsGuillotineOnce(pieces, conservativeMode, sortPieces) {
   const sheets = [];
   const visuals = [];
   const warnings = [];
   const remaining = JSON.parse(JSON.stringify(pieces)).filter(p => p.qty > 0);
-
-  remaining.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+  remaining.sort(sortPieces);
 
   while (remaining.some(p => p.qty > 0)) {
     const sheet = { pieces: [], cuts: 0, edges: 0 };
@@ -82,67 +109,69 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
       const p = remaining[i];
       if (p.qty <= 0) continue;
 
-      let placed = false;
+      let bestChoice = null;
+
       for (const rotated of [false, true]) {
         const pw = rotated ? p.height : p.width;
         const ph = rotated ? p.width : p.height;
 
-        let bestFitIndex = -1;
-        let minWaste = Infinity;
-
         for (let r = 0; r < sheetRects.length; r++) {
           const rect = sheetRects[r];
-          if (pw <= rect.width && ph <= rect.height) {
-            const waste = (rect.width * rect.height) - (pw * ph);
-            if (waste < minWaste) {
-              minWaste = waste;
-              bestFitIndex = r;
-            }
-          }
-        }
-
-        if (bestFitIndex >= 0) {
-          const rect = sheetRects[bestFitIndex];
-          const pos = { x: rect.x, y: rect.y };
-
-          visual.push({
-            x: pos.x,
-            y: pos.y,
-            width: pw,
-            height: ph,
-            label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`,
-            colorKey: `${p.originalWidth}x${p.originalHeight}`
-          });
-
-          sheet.pieces.push({ piece: p, count: 1, rotated });
-          sheet.cuts += isEfficient(p) ? 1 : 2;
-          sheet.edges += p.edges;
-          p.qty--;
-
-          sheetRects.splice(bestFitIndex, 1);
-          sheetRects.push({ x: pos.x + pw, y: pos.y, width: rect.width - pw, height: ph });
-          sheetRects.push({ x: pos.x, y: pos.y + ph, width: rect.width, height: rect.height - ph });
-
-          placed = true;
-
-          // Conservative mode: limit complexity
-          if (conservativeMode) {
-            const distinctCuts = new Set(sheet.pieces.map(p => 
-              (p.rotated ? p.piece.originalHeight + 'x' + p.piece.originalWidth
-                         : p.piece.originalWidth + 'x' + p.piece.originalHeight)
-            ));
-            const totalPiecesOnSheet = sheet.pieces.reduce((sum, p) => sum + p.count, 0);
-
-            if (distinctCuts.size >= 3 && totalPiecesOnSheet >= 8) {
-              i = remaining.length; // Force break outer for loop to finish sheet
-              break;
-            }
-          }
-
-          break;
+          if (pw > rect.width || ph > rect.height) continue;
+          const score = guillotineSplitScore(rect, pw, ph);
+          const cand = {
+            rotated,
+            pw,
+            ph,
+            rectIndex: r,
+            rect,
+            maxLargest: score.maxLargest,
+            minLargest: score.minLargest,
+            waste: score.waste
+          };
+          if (!bestChoice || compareGuillotineChoices(cand, bestChoice) < 0) bestChoice = cand;
         }
       }
-      if (placed) i = -1; // Restart after placement
+
+      let placed = false;
+      if (bestChoice) {
+        const { rotated, pw, ph, rectIndex, rect } = bestChoice;
+        const pos = { x: rect.x, y: rect.y };
+
+        visual.push({
+          x: pos.x,
+          y: pos.y,
+          width: pw,
+          height: ph,
+          label: `1PCS ${rotated ? p.originalHeight + '×' + p.originalWidth : p.originalWidth + '×' + p.originalHeight}`,
+          colorKey: `${p.originalWidth}x${p.originalHeight}`
+        });
+
+        sheet.pieces.push({ piece: p, count: 1, rotated });
+        sheet.cuts += isEfficient(p) ? 1 : 2;
+        sheet.edges += p.edges;
+        p.qty--;
+
+        sheetRects.splice(rectIndex, 1);
+        sheetRects.push({ x: pos.x + pw, y: pos.y, width: rect.width - pw, height: ph });
+        sheetRects.push({ x: pos.x, y: pos.y + ph, width: rect.width, height: rect.height - ph });
+
+        placed = true;
+
+        if (conservativeMode) {
+          const distinctCuts = new Set(sheet.pieces.map(pl =>
+            (pl.rotated ? pl.piece.originalHeight + 'x' + pl.piece.originalWidth
+              : pl.piece.originalWidth + 'x' + pl.piece.originalHeight)
+          ));
+          const totalPiecesOnSheet = sheet.pieces.reduce((sum, pl) => sum + pl.count, 0);
+
+          if (distinctCuts.size >= 3 && totalPiecesOnSheet >= 8) {
+            i = remaining.length;
+          }
+        }
+      }
+
+      if (placed) i = -1;
     }
 
     if (sheet.pieces.length > 0) {
@@ -155,6 +184,19 @@ function packSheetsGuillotine(pieces, conservativeMode = true) {
   }
 
   return { sheets, warnings, visuals };
+}
+
+function packSheetsGuillotine(pieces, conservativeMode = true) {
+  let best = null;
+  for (const sortPieces of PACK_SORT_STRATEGIES) {
+    const candidate = packSheetsGuillotineOnce(pieces, conservativeMode, sortPieces);
+    if (!best ||
+        candidate.sheets.length < best.sheets.length ||
+        (candidate.sheets.length === best.sheets.length && totalCuts(candidate.sheets) < totalCuts(best.sheets))) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 
@@ -355,5 +397,3 @@ printWindow.document.write('</body></html>');
   };
   document.getElementById('cutDetails').prepend(btn);
 }
-
-
