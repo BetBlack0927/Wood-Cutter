@@ -28,6 +28,20 @@ function processInput() {
   }
 }
 
+function clearAll() {
+  const input = document.getElementById('bulkInput');
+  const results = document.getElementById('results');
+  const errors = document.getElementById('errors');
+  const cutDetails = document.getElementById('cutDetails');
+  const printBtn = document.getElementById('printBtn');
+
+  if (input) input.value = '';
+  if (results) results.innerHTML = '';
+  if (errors) errors.innerHTML = '';
+  if (cutDetails) cutDetails.innerHTML = '';
+  if (printBtn) printBtn.remove();
+}
+
 function parseInput(text) {
   return text.split('\n')
     .filter(line => line.trim())
